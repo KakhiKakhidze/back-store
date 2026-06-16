@@ -62,6 +62,21 @@ router.get("/portal", requireRoles(supplierRoles), async (req, res) => {
       const lowestBid = t.bids.length > 0 
         ? Math.min(...t.bids.map(b => b.total_amount))
         : null;
+
+      // Find this supplier's bid if any
+      const myBidObj = t.bids.find(b => String(b.supplier) === String(req.query.supplier_id));
+      const myBid = myBidObj ? {
+        id: String(myBidObj._id),
+        total_amount: myBidObj.total_amount,
+        has_vat: myBidObj.has_vat || false,
+        notes: myBidObj.notes,
+        lines: myBidObj.lines.map(line => ({
+          tender_item_id: String(line.tender_item_id),
+          unit_price: line.unit_price,
+          qty_offered: line.qty_offered,
+          notes: line.notes
+        }))
+      } : null;
       
       return {
         id: obj.id,
@@ -77,7 +92,8 @@ router.get("/portal", requireRoles(supplierRoles), async (req, res) => {
           qty_required: ti.qty_required,
           notes: ti.notes
         })),
-        lowest_bid: lowestBid
+        lowest_bid: lowestBid,
+        my_bid: myBid
       };
     }));
   } catch (err) {
@@ -146,6 +162,7 @@ router.get("/:id", requireRoles([...adminRoles, ...supplierRoles]), async (req, 
         id: String(bid._id),
         supplier_id: bid.supplier?._id ? String(bid.supplier._id) : null,
         supplier_name: bid.supplier?.name,
+        has_vat: bid.has_vat || false,
         lines: bidLines
       };
     }).sort((a, b) => a.total_amount - b.total_amount);
@@ -302,8 +319,8 @@ router.post("/:id/evaluate", requireRoles(adminRoles), async (req, res) => {
 });
 
 // Submit / update bid
-router.post("/:id/bids", requireRoles(supplierRoles), async (req, res) => {
-  const { supplier_id, notes, lines } = req.body;
+router.post("/:id/bids", requireRoles([...supplierRoles, ...adminRoles, ...financeRoles]), async (req, res) => {
+  const { supplier_id, notes, lines, has_vat } = req.body;
   try {
     const tender = await Tender.findById(req.params.id);
     if (!tender) return res.status(404).json({ error: "Tender not found" });
@@ -321,6 +338,7 @@ router.post("/:id/bids", requireRoles(supplierRoles), async (req, res) => {
       supplier: supplier_id,
       submitted_at: new Date(),
       total_amount: totalAmount,
+      has_vat: has_vat || false,
       notes: notes || null,
       lines: lines.map(l => ({
         tender_item_id: l.tender_item_id,

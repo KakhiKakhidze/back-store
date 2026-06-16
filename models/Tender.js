@@ -17,6 +17,7 @@ const tenderBidSchema = new mongoose.Schema({
   supplier: { type: mongoose.Schema.Types.ObjectId, ref: 'Supplier', required: true },
   submitted_at: { type: Date, default: Date.now },
   total_amount: { type: Number, default: 0 },
+  has_vat: { type: Boolean, default: false },
   notes: String,
   lines: [tenderBidLineSchema],
 });
