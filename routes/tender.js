@@ -197,7 +197,9 @@ router.put("/:id", requireRoles(adminRoles), async (req, res) => {
     const tender = await Tender.findById(req.params.id);
     if (!tender) return res.status(404).json({ error: "Tender not found" });
     
-    if (["Awarded", "Cancelled"].includes(tender.status)) {
+    const age = Date.now() - new Date(tender.createdAt).getTime();
+    const isWithinOneHour = age < 60 * 60 * 1000;
+    if (["Awarded", "Cancelled"].includes(tender.status) && !isWithinOneHour) {
       return res.status(400).json({ error: `Cannot edit tender in ${tender.status} status` });
     }
 
