@@ -58,39 +58,57 @@ router.get("/", requireRoles(allowed), async (req, res) => {
     });
 
     const categories = await Category.find();
-    const categoryValues = await Promise.all(categories.map(async (c) => {
-      const catItems = await Item.find({ category: c._id, active: true });
-      const value = catItems.reduce((sum, i) => sum + (i.current_qty * i.unit_cost), 0);
-      return {
-        name: c.name,
-        value,
-        item_count: catItems.length
-      };
-    }));
+    const categoryMap = {};
+    categories.forEach(c => {
+      categoryMap[String(c._id)] = { name: c.name, value: 0, item_count: 0 };
+    });
+
+    items.forEach(i => {
+      const catId = i.category ? String(i.category._id || i.category) : "";
+      if (categoryMap[catId]) {
+        categoryMap[catId].value += (i.current_qty * i.unit_cost);
+        categoryMap[catId].item_count += 1;
+      }
+    });
+    const categoryValues = Object.values(categoryMap);
     categoryValues.sort((a, b) => b.value - a.value);
 
-    // Movement trends (last 7 days)
+    // Movement trends (last 7 days) - Single query optimized
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    const recentMovements7Days = await StockMovement.find({
+      createdAt: { $gte: sevenDaysAgo }
+    });
+
     const trends = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      d.setHours(0, 0, 0, 0);
-      const nextD = new Date(d);
-      nextD.setDate(nextD.getDate() + 1);
+      const dStr = d.toLocaleDateString("en-US", { weekday: "short" });
 
-      const receipts = await StockMovement.aggregate([
-        { $match: { movement_type: 'Receipt', createdAt: { $gte: d, $lt: nextD } } },
-        { $group: { _id: null, total: { $sum: "$qty" } } }
-      ]);
-      const issues = await StockMovement.aggregate([
-        { $match: { movement_type: 'Issue', createdAt: { $gte: d, $lt: nextD } } },
-        { $group: { _id: null, total: { $sum: { $abs: "$qty" } } } }
-      ]);
+      const startOfDay = new Date(d);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(d);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const dayMovements = recentMovements7Days.filter(m =>
+        m.createdAt >= startOfDay && m.createdAt <= endOfDay
+      );
+
+      const receiptsSum = dayMovements
+        .filter(m => m.movement_type === 'Receipt')
+        .reduce((sum, m) => sum + m.qty, 0);
+
+      const issuesSum = dayMovements
+        .filter(m => m.movement_type === 'Issue')
+        .reduce((sum, m) => sum + Math.abs(m.qty), 0);
 
       trends.push({
-        day: d.toLocaleDateString("en-US", { weekday: "short" }),
-        receipts: receipts[0]?.total || 0,
-        issues: issues[0]?.total || 0
+        day: dStr,
+        receipts: receiptsSum,
+        issues: issuesSum
       });
     }
 
@@ -109,12 +127,13 @@ router.get("/", requireRoles(allowed), async (req, res) => {
       totalItems,
       totalValue,
       lowStockCount: lowStockItems.length,
-      lowStockItems: lowStockItems.map(i => ({ ...i.toObject(), category_name: i.category?.name })),
+      lowStockItems: lowStockItems.map(i => ({ ...i.toObject(), id: i._id, category_name: i.category?.name })),
       pendingSRF,
       pendingPR,
       openPO,
       recentMovements: recentMovements.map(m => ({
         ...m.toObject(),
+        id: m._id,
         item_code: m.item?.code,
         item_name: m.item?.name,
         performer_name: m.performed_by?.full_name,
@@ -125,7 +144,7 @@ router.get("/", requireRoles(allowed), async (req, res) => {
       movementTrends: trends,
       stockHealthPct,
       tenderStats: { activeTenders, pendingEvaluation, publishedTenders },
-      recentTenders: recentTenders.map(t => ({ ...t.toObject(), winner_name: t.winner_supplier?.name, date_created: t.createdAt })),
+      recentTenders: recentTenders.map(t => ({ ...t.toObject(), id: t._id, winner_name: t.winner_supplier?.name, date_created: t.createdAt })),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
